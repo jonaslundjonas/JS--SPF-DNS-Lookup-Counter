@@ -1,0 +1,495 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width">
+  <title>SPF Tree (Expandable/Collapsible) - v1.2</title>
+  <!-- Materialize CSS -->
+  <link
+    href="https://cdnjs.cloudflare.com/ajax/libs/materialize/1.0.0/css/materialize.min.css"
+    rel="stylesheet"
+  />
+  <!-- Material Icons -->
+  <link
+    href="https://fonts.googleapis.com/icon?family=Material+Icons"
+    rel="stylesheet"
+  />
+  <style>
+    body {
+      background-color: #121212;
+      color: #ffffff;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    .container {
+      flex: 1;
+      padding: 20px;
+      max-width: 900px;
+    }
+    .card {
+      background-color: #1e1e1e;
+      border-radius: 8px;
+      padding: 20px;
+      margin-bottom: 20px;
+    }
+    .input-field input {
+      color: #ffffff !important;
+      border-bottom: 1px solid #555 !important;
+    }
+    .input-field input:focus {
+      border-bottom: 1px solid #26a69a !important;
+      box-shadow: 0 1px 0 0 #26a69a !important;
+    }
+    .input-field label {
+      color: #888 !important;
+    }
+    .input-field input:focus + label {
+      color: #26a69a !important;
+    }
+    .btn {
+      background-color: #26a69a;
+      text-transform: uppercase;
+      font-family: 'Roboto', sans-serif;
+      letter-spacing: 1px;
+    }
+    .btn:hover {
+      background-color: #2bbbad;
+    }
+
+    /* Lookup list styling */
+    .lookup-item {
+      padding: 10px;
+      margin: 5px 0;
+      border-radius: 4px;
+      background-color: #2d2d2d;
+    }
+    .lookup-count {
+      display: inline-block;
+      width: 24px;
+      height: 24px;
+      line-height: 24px;
+      text-align: center;
+      border-radius: 50%;
+      margin-left: 10px;
+      font-weight: bold;
+    }
+    .count-ok {
+      background-color: #4caf50; /* green */
+    }
+    .count-warning {
+      background-color: #ffa726; /* orange */
+    }
+    .count-error {
+      background-color: #ef5350; /* red */
+    }
+    .count-exceed {
+      background-color: #d32f2f; /* deeper red */
+    }
+
+    /* Tree styling */
+    .spf-tree {
+      margin-left: 1.5em;
+      border-left: 1px dashed #555;
+      padding-left: 1.5em;
+      list-style: none;
+    }
+    .spf-tree li {
+      margin: 6px 0;
+      position: relative;
+    }
+    .tree-node {
+      display: flex;
+      align-items: center;
+      cursor: pointer; /* so user knows they can click the toggle */
+    }
+    .toggle-icon {
+      display: inline-block;
+      width: 20px;
+      text-align: center;
+      margin-right: 5px;
+      color: #aaa;
+      font-weight: bold;
+      cursor: pointer;
+      user-select: none;
+    }
+    .spf-domain {
+      color: #eee;
+      font-weight: bold;
+      margin-right: 6px;
+    }
+    .spf-record {
+      font-size: 0.9em;
+      color: #ccc;
+      margin: 2px 0 2px 26px; /* slight indent for SPF text */
+    }
+
+    /* Collapsed children are hidden */
+    .collapsed {
+      display: none;
+    }
+  </style>
+</head>
+<body>
+  <script>
+    console.log("SPF Tree Expandable - Version 1.2. We do NOT stop after 10, so you can see 11th, 12th, etc.");
+  </script>
+
+  <div class="container">
+    <h4 class="center-align">SPF Tree (Expandable/Collapsible) v1.2</h4>
+    <p class="center-align" style="color: #888;">
+      Enter a domain name to see a hierarchical (tree) of its SPF
+      <strong>include:</strong> and <strong>redirect=</strong> references.
+      This version <strong>continues</strong> well beyond 10, so you can see 
+      lookups #11, #12, etc. if they exist. We do <em>not</em> parse or count 
+      <code>a</code>, <code>mx</code>, <code>ptr</code>, or <code>exists</code> 
+      as DNS calls, so if you rely on those to exceed 10, they won't appear here.
+    </p>
+
+    <!-- Input card -->
+    <div class="card">
+      <div class="input-field">
+        <input type="text" id="domainInput" class="validate" />
+        <label for="domainInput">Enter Domain</label>
+      </div>
+      <div class="center-align">
+        <button class="btn waves-effect waves-light" onclick="checkSPF()">
+          <span class="valign-wrapper">
+            CHECK SPF
+            <i class="material-icons right">search</i>
+          </span>
+        </button>
+      </div>
+    </div>
+
+    <!-- Linear list of actual DNS lookups -->
+    <div class="card">
+      <h5>Linear Lookup List</h5>
+      <div id="resultsList" class="section">
+        <!-- Populated dynamically -->
+      </div>
+    </div>
+
+    <!-- Expandable tree structure of includes/redirects -->
+    <div class="card">
+      <h5>Expandable Tree View</h5>
+      <div id="treeContainer" class="section">
+        <!-- Populated dynamically -->
+      </div>
+    </div>
+  </div>
+
+  <footer
+    class="center-align"
+    style="padding: 20px; color: #666; font-size: 0.9em;"
+  >
+    SPF Tree Viewer by Jonas Lund 2024 - Version 1.2
+  </footer>
+
+  <!-- Materialize JS -->
+  <script
+    src="https://cdnjs.cloudflare.com/ajax/libs/materialize/1.0.0/js/materialize.min.js"
+  ></script>
+
+  <script>
+    /**
+     * We'll store all "lookups" in a global array so we can display them in a
+     * linear list, counting actual domain expansions (include/redirect).
+     *
+     * We do NOT parse or count a/mx/ptr/exists as separate lookups.
+     */
+    let globalLookups = [];
+    let globalTree = null;
+
+    class SPFNode {
+      constructor(domain) {
+        this.domain = domain;
+        this.spfRecords = [];
+        this.children = [];
+      }
+    }
+
+    async function resolveDNS(domain) {
+      console.log("[DEBUG] resolveDNS() for:", domain);
+      const url = `https://1.1.1.1/dns-query?name=${domain}&type=TXT`;
+      const resp = await fetch(url, {
+        headers: { accept: "application/dns-json" },
+        mode: "cors"
+      });
+      if (!resp.ok) {
+        throw new Error(`HTTP error! status: ${resp.status}`);
+      }
+      const jsonData = await resp.json();
+      console.log("[DEBUG] DNS response for", domain, ":", jsonData);
+      return jsonData;
+    }
+
+    /**
+     * Recursively build an SPF tree by:
+     *  - Looking up TXT
+     *  - Finding v=spf1
+     *  - Recursively handling "include:" and "redirect="
+     *  - NOT counting a/mx/ptr/exists as separate lookups
+     *  - NOT stopping at 10
+     */
+    async function buildSPFTree(domain, visited = new Set(), level = 1) {
+      console.log(`[DEBUG] buildSPFTree("${domain}", level=${level}) called.`);
+      if (visited.has(domain)) {
+        console.log(`[DEBUG] Already visited domain: ${domain} (avoiding loop).`);
+        return null; 
+      }
+      visited.add(domain);
+
+      // This domain triggers an actual DNS fetch, so we add to globalLookups
+      globalLookups.push({
+        domain,
+        detail: "Fetched TXT record",
+        level
+      });
+
+      const node = new SPFNode(domain);
+
+      let dnsData;
+      try {
+        dnsData = await resolveDNS(domain);
+      } catch (err) {
+        console.error(`[DEBUG] DNS error for ${domain}:`, err);
+        node.spfRecords.push(`Error: ${err.message}`);
+        return node;
+      }
+
+      if (!dnsData.Answer) {
+        console.log(`[DEBUG] No TXT answer found for ${domain}`);
+        node.spfRecords.push("No TXT records found");
+        return node;
+      }
+
+      // Filter for v=spf1
+      const spfAnswers = dnsData.Answer.filter(a => a.data.includes("v=spf1"));
+      if (!spfAnswers.length) {
+        console.log(`[DEBUG] No SPF record found for ${domain}`);
+        node.spfRecords.push("No SPF record found");
+        return node;
+      }
+
+      for (const spfEntry of spfAnswers) {
+        console.log(`[DEBUG] Found SPF entry for ${domain}: ${spfEntry.data}`);
+        node.spfRecords.push(spfEntry.data);
+
+        // includes
+        const includes = spfEntry.data.match(/include:([^\s]+)/g) || [];
+        for (const inc of includes) {
+          const incDomain = inc.split(":")[1];
+          console.log(`[DEBUG] Found include => ${incDomain} from ${domain}`);
+          const childNode = await buildSPFTree(incDomain, visited, level + 1);
+          if (childNode) {
+            node.children.push(childNode);
+          }
+        }
+
+        // redirect=
+        const redirectMatch = spfEntry.data.match(/redirect=([^\s]+)/);
+        if (redirectMatch) {
+          const redirectDomain = redirectMatch[1];
+          console.log(`[DEBUG] Found redirect => ${redirectDomain} from ${domain}`);
+          const childNode = await buildSPFTree(redirectDomain, visited, level + 1);
+          if (childNode) {
+            node.children.push(childNode);
+          }
+        }
+      }
+
+      return node;
+    }
+
+    /**
+     * Called when user clicks "CHECK SPF".
+     */
+    async function checkSPF() {
+      const domain = document.getElementById("domainInput").value.trim();
+      if (!domain) {
+        M.toast({ html: "Please enter a domain", classes: "red" });
+        return;
+      }
+
+      // Clear old data
+      globalLookups = [];
+      globalTree = null;
+
+      document.getElementById("resultsList").innerHTML =
+        '<div class="progress"><div class="indeterminate"></div></div>';
+      document.getElementById("treeContainer").innerHTML =
+        '<div class="progress"><div class="indeterminate"></div></div>';
+
+      try {
+        const visited = new Set();
+        globalTree = await buildSPFTree(domain, visited, 1);
+
+        // Render the linear list
+        renderLookupList(globalLookups);
+
+        // Render the tree
+        if (globalTree) {
+          renderTree(globalTree);
+        } else {
+          document.getElementById("treeContainer").innerHTML =
+            "<p>No SPF data or an error occurred.</p>";
+        }
+      } catch (err) {
+        console.error("[DEBUG] checkSPF error:", err);
+        document.getElementById("resultsList").innerHTML =
+          `<div class="red-text">${err.message}</div>`;
+        document.getElementById("treeContainer").innerHTML =
+          `<div class="red-text">${err.message}</div>`;
+        M.toast({ html: err.message, classes: "red" });
+      }
+    }
+
+    /**
+     * Show a linear list of the actual DNS lookups we've done.
+     * We do not stop at 10, but label lookups after #10 as exceeding typical SPF limit.
+     */
+    function renderLookupList(lookups) {
+      const resultsDiv = document.getElementById("resultsList");
+      resultsDiv.innerHTML = "";
+
+      lookups.forEach((item, index) => {
+        const lookupDiv = document.createElement("div");
+        lookupDiv.className = "lookup-item";
+
+        const itemNumber = index + 1;
+        let countClass = "";
+        if (itemNumber <= 5) {
+          countClass = "count-ok";
+        } else if (itemNumber <= 8) {
+          countClass = "count-warning";
+        } else if (itemNumber <= 10) {
+          countClass = "count-error";
+        } else {
+          // If it's beyond 10, highlight it differently
+          countClass = "count-exceed";
+        }
+
+        // If itemNumber is above 10, we add a note in the detail
+        let detailText = item.detail;
+        if (itemNumber > 10) {
+          detailText += " (exceeding typical SPF limit!)";
+        }
+
+        lookupDiv.innerHTML = `
+          <div>
+            <strong>${item.domain}</strong> 
+            <span class="lookup-count ${countClass}">${itemNumber}</span>
+          </div>
+          <div style="margin-top: 5px; font-size: 0.9em; color: #ccc;">
+            ${detailText}
+          </div>
+        `;
+        resultsDiv.appendChild(lookupDiv);
+      });
+
+      // Summarize
+      const totalCount = lookups.length;
+      const summaryDiv = document.createElement("div");
+      summaryDiv.className = "section center-align";
+      const colorClass = totalCount <= 10 ? "green-text" : "red-text";
+      summaryDiv.innerHTML = `
+        <h5>Total DNS Lookups: 
+          <span class="${colorClass}">
+            ${totalCount}/10
+            ${totalCount > 10 ? "(exceeds typical SPF limit!)" : ""}
+          </span>
+        </h5>
+      `;
+      resultsDiv.appendChild(summaryDiv);
+    }
+
+    /**
+     * Render the SPF tree with collapsible child nodes.
+     * Children are hidden by default; click the toggleIcon to expand/collapse.
+     */
+    function renderTree(root) {
+      const container = document.getElementById("treeContainer");
+      container.innerHTML = "";
+
+      const ul = document.createElement("ul");
+      ul.className = "spf-tree";
+      container.appendChild(ul);
+
+      function renderNode(node, parentUl) {
+        if (!node) return;
+
+        // Create the <li> for this node
+        const li = document.createElement("li");
+        parentUl.appendChild(li);
+
+        // Build a container for the domain row
+        const rowDiv = document.createElement("div");
+        rowDiv.className = "tree-node";
+
+        // We'll add a plus/minus toggle only if there are children
+        if (node.children.length > 0) {
+          const toggleSpan = document.createElement("span");
+          toggleSpan.className = "toggle-icon";
+          toggleSpan.textContent = "+";
+          toggleSpan.onclick = (evt) => toggleCollapse(evt, childUl, toggleSpan);
+          rowDiv.appendChild(toggleSpan);
+        } else {
+          // If no children, show a blank spacer so things line up
+          const spacer = document.createElement("span");
+          spacer.style.marginRight = "20px";
+          rowDiv.appendChild(spacer);
+        }
+
+        // Domain name
+        const domainSpan = document.createElement("span");
+        domainSpan.className = "spf-domain";
+        domainSpan.textContent = node.domain;
+        rowDiv.appendChild(domainSpan);
+
+        li.appendChild(rowDiv);
+
+        // Show SPF records for this domain
+        node.spfRecords.forEach((rec) => {
+          const recLine = document.createElement("div");
+          recLine.className = "spf-record";
+          recLine.textContent = `SPF: ${rec.replace(/"/g, "")}`;
+          li.appendChild(recLine);
+        });
+
+        // The UL for children, initially collapsed
+        const childUl = document.createElement("ul");
+        childUl.className = "spf-tree collapsed";
+        li.appendChild(childUl);
+
+        // Recursively render each child
+        node.children.forEach((child) => {
+          renderNode(child, childUl);
+        });
+      }
+
+      function toggleCollapse(evt, childUl, toggleSpan) {
+        evt.stopPropagation();
+        if (childUl.classList.contains("collapsed")) {
+          // Expand
+          childUl.classList.remove("collapsed");
+          toggleSpan.textContent = "-";
+        } else {
+          // Collapse
+          childUl.classList.add("collapsed");
+          toggleSpan.textContent = "+";
+        }
+      }
+
+      // Render the root
+      renderNode(root, ul);
+    }
+
+    // Initialize Materialize
+    document.addEventListener("DOMContentLoaded", function() {
+      console.log("[DEBUG] DOMContentLoaded, SPF Tree Expandable v1.2 ready.");
+      M.updateTextFields();
+    });
+  </script>
+</body>
+</html>
